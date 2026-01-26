@@ -1,41 +1,13 @@
 import React, { useState, useEffect } from 'react';
 
 const WorkHoursTracker = () => {
-  // 초기 데이터 - 2026년 1월 기록 (이미지 기반)
-  // excludeTime: 제외시간 (분 단위), lunchTime: 점심시간 (분 단위, 기본 90분)
-  const initialRecords = {
-    // 1W (1주차) - 1월 5일~9일 (월~금)
-    '2026-01-05': { startTime: '08:10', endTime: '16:38', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-06': { startTime: '08:08', endTime: '16:44', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-07': { startTime: '08:13', endTime: '16:38', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-08': { startTime: '08:19', endTime: '16:09', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-09': { startTime: '08:16', endTime: '16:40', lunchTime: 90, excludeTime: 3, memo: '' },
-    // 2W (2주차) - 1월 12일~16일 (월~금)
-    '2026-01-12': { startTime: '09:49', endTime: '19:38', lunchTime: 90, excludeTime: 3, memo: '' },
-    '2026-01-13': { startTime: '08:22', endTime: '16:35', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-14': { startTime: '08:07', endTime: '16:32', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-15': { startTime: '08:00', endTime: '17:00', lunchTime: 90, excludeTime: 0, memo: '연차' },
-    '2026-01-16': { startTime: '08:00', endTime: '17:30', lunchTime: 90, excludeTime: 0, memo: '매뉴얼' },
-    // 3W (3주차) - 1월 19일~23일 (월~금)
-    '2026-01-19': { startTime: '08:00', endTime: '17:00', lunchTime: 90, excludeTime: 0, memo: '연차' },
-    '2026-01-20': { startTime: '08:00', endTime: '17:00', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-21': { startTime: '08:00', endTime: '16:36', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-22': { startTime: '08:00', endTime: '17:30', lunchTime: 90, excludeTime: 0, memo: '매뉴얼 한남' },
-    '2026-01-23': { startTime: '08:21', endTime: '16:25', lunchTime: 90, excludeTime: 0, memo: '' },
-    // 4W (4주차) - 1월 26일~30일 (월~금)
-    '2026-01-26': { startTime: '08:20', endTime: '20:00', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-01-29': { startTime: '08:00', endTime: '17:30', lunchTime: 90, excludeTime: 0, memo: '매뉴얼' },
-    '2026-01-30': { startTime: '08:00', endTime: '17:30', lunchTime: 90, excludeTime: 0, memo: '매뉴얼' },
-    // 5W - 2월 (1월 계산에 포함)
-    '2026-02-02': { startTime: '08:00', endTime: '17:00', lunchTime: 90, excludeTime: 0, memo: '' },
-    '2026-02-03': { startTime: '08:00', endTime: '17:00', lunchTime: 90, excludeTime: 0, memo: '' },
-  };
+  const initialRecords = {};
+  const initialTargets = {};
 
-  const initialTargets = {
-    '2026-01': 150
-  };
-
-  const [currentMonth, setCurrentMonth] = useState('2026-01');
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
   
   const [monthlyTargets, setMonthlyTargets] = useState(() => {
     const saved = localStorage.getItem('workHoursTargets');
