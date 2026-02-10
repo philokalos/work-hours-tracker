@@ -2,20 +2,23 @@
   "name": "work-hours-tracker",
   "version": "1.0.0",
   "private": true,
-  "homepage": "https://YOUR_USERNAME.github.io/work-hours-tracker",
+  "homepage": "https://philokalos.github.io/work-hours-tracker",
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1"
+    "react-scripts": "5.0.1",
+    "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "gh-pages": "^6.1.1"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d build"
+    "deploy": "gh-pages -d build",
+    "test:e2e": "npx playwright test"
   },
   "browserslist": {
     "production": [
