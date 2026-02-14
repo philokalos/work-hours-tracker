@@ -143,18 +143,24 @@ const WorkHoursTracker = () => {
     }));
   };
 
-  // 반차 퀵입력 (4시간)
+  // 반차 퀵입력 (기존 출퇴근 시간이 있으면 유지, 없으면 기본값 설정)
   const setHalfLeave = (date, type = 'am') => {
-    setRecords(prev => ({
-      ...prev,
-      [date]: {
-        startTime: type === 'am' ? '13:00' : '08:00',
-        endTime: type === 'am' ? '17:30' : '12:30',
-        lunchTime: type === 'am' ? 0 : 0,
-        excludeTime: 0,
-        memo: type === 'am' ? '오전반차' : '오후반차'
-      }
-    }));
+    setRecords(prev => {
+      const existing = prev[date] || {};
+      const defaultStart = type === 'am' ? '13:00' : '08:00';
+      const defaultEnd = type === 'am' ? '17:30' : '12:30';
+      return {
+        ...prev,
+        [date]: {
+          ...existing,
+          startTime: existing.startTime || defaultStart,
+          endTime: existing.endTime || defaultEnd,
+          lunchTime: 0,
+          excludeTime: existing.excludeTime ?? 0,
+          memo: type === 'am' ? '오전반차' : '오후반차'
+        }
+      };
+    });
   };
 
   // 기본 근무 퀵입력
