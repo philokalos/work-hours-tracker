@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Tesseract from 'tesseract.js';
 
 const WorkHoursTracker = () => {
   const initialRecords = {};
@@ -22,13 +23,40 @@ const WorkHoursTracker = () => {
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState('150');
   
+  const [ocrProcessing, setOcrProcessing] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrResult, setOcrResult] = useState(null);
+  const [ocrParsedRecords, setOcrParsedRecords] = useState(null);
+  const [showOcrModal, setShowOcrModal] = useState(false);
+  const [ocrImagePreview, setOcrImagePreview] = useState(null);
+
   const LUNCH_BREAK = 90; // 점심시간 기본값 90분 (1시간 30분)
   
   // 오늘 날짜
   const today = new Date().toISOString().split('T')[0];
 
-  // 2026년 대한민국 공휴일
-  const holidays2026 = {
+  // 대한민국 공휴일 (연도별 하드코딩)
+  const holidays = {
+    // 2025년
+    '2025-01-01': '신정',
+    '2025-01-27': '임시공휴일(설날)',
+    '2025-01-28': '설날 연휴',
+    '2025-01-29': '설날',
+    '2025-01-30': '설날 연휴',
+    '2025-03-01': '삼일절',
+    '2025-03-03': '대체공휴일(삼일절)',
+    '2025-05-05': '어린이날·부처님오신날',
+    '2025-05-06': '대체공휴일(부처님오신날)',
+    '2025-06-06': '현충일',
+    '2025-08-15': '광복절',
+    '2025-10-03': '개천절',
+    '2025-10-05': '추석 연휴',
+    '2025-10-06': '추석',
+    '2025-10-07': '추석 연휴',
+    '2025-10-08': '대체공휴일(추석)',
+    '2025-10-09': '한글날',
+    '2025-12-25': '크리스마스',
+    // 2026년
     '2026-01-01': '신정',
     '2026-02-16': '설날 연휴',
     '2026-02-17': '설날',
@@ -48,10 +76,31 @@ const WorkHoursTracker = () => {
     '2026-10-05': '대체공휴일(개천절)',
     '2026-10-09': '한글날',
     '2026-12-25': '크리스마스',
+    // 2027년
+    '2027-01-01': '신정',
+    '2027-02-06': '설날 연휴',
+    '2027-02-07': '설날',
+    '2027-02-08': '설날 연휴',
+    '2027-02-09': '대체공휴일(설날)',
+    '2027-03-01': '삼일절',
+    '2027-05-05': '어린이날',
+    '2027-05-13': '부처님오신날',
+    '2027-06-06': '현충일',
+    '2027-08-15': '광복절',
+    '2027-08-16': '대체공휴일(광복절)',
+    '2027-09-14': '추석 연휴',
+    '2027-09-15': '추석',
+    '2027-09-16': '추석 연휴',
+    '2027-10-03': '개천절',
+    '2027-10-04': '대체공휴일(개천절)',
+    '2027-10-09': '한글날',
+    '2027-10-11': '대체공휴일(한글날)',
+    '2027-12-25': '크리스마스',
+    '2027-12-27': '대체공휴일(크리스마스)',
   };
 
   // 공휴일 확인
-  const isHoliday = (dateStr) => holidays2026[dateStr] || null;
+  const isHoliday = (dateStr) => holidays[dateStr] || null;
 
   // 데이터 저장
   useEffect(() => {
@@ -135,18 +184,24 @@ const WorkHoursTracker = () => {
     }));
   };
 
-  // 반차 퀵입력 (4시간)
+  // 반차 퀵입력 (기존 출퇴근 시간이 있으면 유지, 없으면 기본값 설정)
   const setHalfLeave = (date, type = 'am') => {
-    setRecords(prev => ({
-      ...prev,
-      [date]: {
-        startTime: type === 'am' ? '13:00' : '08:00',
-        endTime: type === 'am' ? '17:30' : '12:30',
-        lunchTime: type === 'am' ? 0 : 0,
-        excludeTime: 0,
-        memo: type === 'am' ? '오전반차' : '오후반차'
-      }
-    }));
+    setRecords(prev => {
+      const existing = prev[date] || {};
+      const defaultStart = type === 'am' ? '13:00' : '08:00';
+      const defaultEnd = type === 'am' ? '17:30' : '12:30';
+      return {
+        ...prev,
+        [date]: {
+          ...existing,
+          startTime: existing.startTime || defaultStart,
+          endTime: existing.endTime || defaultEnd,
+          lunchTime: 0,
+          excludeTime: existing.excludeTime ?? 0,
+          memo: type === 'am' ? '오전반차' : '오후반차'
+        }
+      };
+    });
   };
 
   // 기본 근무 퀵입력
@@ -231,6 +286,133 @@ const WorkHoursTracker = () => {
         }
       };
       reader.readAsText(file);
+    }
+  };
+
+  // OCR 텍스트에서 근무 기록 파싱
+  const parseOcrText = (text) => {
+    const lines = text.split('\n').filter(line => line.trim());
+    const parsedRecords = {};
+    const [currentYear] = currentMonth.split('-');
+
+    for (const line of lines) {
+      let dateStr = null;
+
+      // YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD
+      const fullDateMatch = line.match(/(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})/);
+      // MM-DD, MM.DD, MM/DD (날짜 구분자: - . /)
+      const shortDateMatch = line.match(/(?:^|[^\d:])(\d{1,2})[-.\/](\d{1,2})(?=[^\d:]|$)/);
+
+      if (fullDateMatch) {
+        const [, year, month, day] = fullDateMatch;
+        dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      } else if (shortDateMatch) {
+        const [, month, day] = shortDateMatch;
+        const m = parseInt(month);
+        const d = parseInt(day);
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+          dateStr = `${currentYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        }
+      }
+
+      if (!dateStr) continue;
+
+      // 시간 패턴 추출 (HH:MM) - 날짜 부분 이후에서 찾기
+      const dateMatchEnd = fullDateMatch
+        ? line.indexOf(fullDateMatch[0]) + fullDateMatch[0].length
+        : (shortDateMatch ? line.indexOf(shortDateMatch[0]) + shortDateMatch[0].length : 0);
+      const afterDate = line.slice(dateMatchEnd);
+
+      const times = [];
+      const timeRegex = /(\d{1,2}):(\d{2})/g;
+      let match;
+      while ((match = timeRegex.exec(afterDate)) !== null) {
+        const h = parseInt(match[1]);
+        const m = parseInt(match[2]);
+        if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+          times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+        }
+      }
+
+      if (times.length >= 2) {
+        parsedRecords[dateStr] = {
+          startTime: times[0],
+          endTime: times[1],
+          lunchTime: 90,
+          excludeTime: 0,
+          memo: ''
+        };
+      }
+    }
+
+    return parsedRecords;
+  };
+
+  // 이미지 업로드 및 OCR 처리
+  const handleImageUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('이미지 파일만 업로드할 수 있습니다.');
+      event.target.value = '';
+      return;
+    }
+
+    const imageUrl = URL.createObjectURL(file);
+    setOcrImagePreview(imageUrl);
+    setShowOcrModal(true);
+    setOcrProcessing(true);
+    setOcrProgress(0);
+    setOcrResult(null);
+    setOcrParsedRecords(null);
+
+    try {
+      const worker = await Tesseract.createWorker('kor+eng', 1, {
+        logger: (m) => {
+          if (m.status === 'recognizing text') {
+            setOcrProgress(Math.round(m.progress * 100));
+          }
+        }
+      });
+
+      const { data: { text } } = await worker.recognize(imageUrl);
+      await worker.terminate();
+
+      setOcrResult(text);
+
+      const parsed = parseOcrText(text);
+      if (Object.keys(parsed).length > 0) {
+        setOcrParsedRecords(parsed);
+      }
+    } catch (err) {
+      alert('이미지 인식에 실패했습니다: ' + err.message);
+      setShowOcrModal(false);
+    } finally {
+      setOcrProcessing(false);
+    }
+
+    event.target.value = '';
+  };
+
+  // OCR 결과 적용
+  const applyOcrRecords = () => {
+    if (ocrParsedRecords) {
+      setRecords(prev => ({ ...prev, ...ocrParsedRecords }));
+      alert(`${Object.keys(ocrParsedRecords).length}건의 근무 기록이 적용되었습니다.`);
+    }
+    closeOcrModal();
+  };
+
+  // OCR 모달 닫기
+  const closeOcrModal = () => {
+    setShowOcrModal(false);
+    setOcrResult(null);
+    setOcrParsedRecords(null);
+    setOcrProcessing(false);
+    if (ocrImagePreview) {
+      URL.revokeObjectURL(ocrImagePreview);
+      setOcrImagePreview(null);
     }
   };
 
@@ -384,6 +566,23 @@ const WorkHoursTracker = () => {
               type="file"
               accept=".json"
               onChange={importData}
+              style={{ display: 'none' }}
+            />
+          </label>
+          <label style={{
+            padding: '6px 12px',
+            border: '1px solid #4dabf7',
+            backgroundColor: '#e7f5ff',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            color: '#1971c2'
+          }}>
+            📷 이미지 인식
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleImageUpload}
               style={{ display: 'none' }}
             />
           </label>
@@ -721,6 +920,160 @@ const WorkHoursTracker = () => {
       }}>
         점심시간 1시간 30분 자동 제외 | 데이터는 브라우저에 자동 저장됩니다
       </div>
+
+      {/* OCR 모달 */}
+      {showOcrModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            maxWidth: '700px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', color: '#333' }}>이미지 텍스트 인식</h2>
+              <button
+                onClick={closeOcrModal}
+                style={{
+                  border: 'none',
+                  backgroundColor: '#f1f3f5',
+                  borderRadius: '50%',
+                  width: '32px',
+                  height: '32px',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                  color: '#495057'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {ocrImagePreview && (
+              <div style={{ marginBottom: '16px', textAlign: 'center' }}>
+                <img
+                  src={ocrImagePreview}
+                  alt="업로드된 이미지"
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '200px',
+                    borderRadius: '8px',
+                    border: '1px solid #dee2e6'
+                  }}
+                />
+              </div>
+            )}
+
+            {ocrProcessing && (
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '14px', color: '#495057', marginBottom: '8px' }}>
+                  텍스트 인식 중... {ocrProgress}%
+                </div>
+                <div style={{
+                  height: '8px',
+                  backgroundColor: '#e9ecef',
+                  borderRadius: '4px',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${ocrProgress}%`,
+                    backgroundColor: '#4dabf7',
+                    borderRadius: '4px',
+                    transition: 'width 0.3s ease'
+                  }} />
+                </div>
+              </div>
+            )}
+
+            {ocrResult && (
+              <>
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: '#333', marginBottom: '8px' }}>
+                    인식된 텍스트
+                  </div>
+                  <pre style={{
+                    backgroundColor: '#f8f9fa',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                    maxHeight: '150px',
+                    overflow: 'auto',
+                    border: '1px solid #dee2e6',
+                    color: '#333'
+                  }}>
+                    {ocrResult}
+                  </pre>
+                </div>
+
+                {ocrParsedRecords && Object.keys(ocrParsedRecords).length > 0 ? (
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#333', marginBottom: '8px' }}>
+                      추출된 근무 기록 ({Object.keys(ocrParsedRecords).length}건)
+                    </div>
+                    <div style={{
+                      backgroundColor: '#d3f9d8',
+                      padding: '12px',
+                      borderRadius: '8px',
+                      fontSize: '12px'
+                    }}>
+                      {Object.entries(ocrParsedRecords).map(([date, rec]) => (
+                        <div key={date} style={{ marginBottom: '4px', color: '#2f9e44' }}>
+                          {date}: {rec.startTime} ~ {rec.endTime}
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={applyOcrRecords}
+                      style={{
+                        marginTop: '12px',
+                        padding: '10px 24px',
+                        border: 'none',
+                        backgroundColor: '#2f9e44',
+                        color: 'white',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        width: '100%'
+                      }}
+                    >
+                      근무 기록에 적용
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{
+                    backgroundColor: '#fff3bf',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    color: '#e67700'
+                  }}>
+                    근무 기록을 자동으로 추출하지 못했습니다. 이미지에 날짜(MM/DD)와 시간(HH:MM) 패턴이 포함되어 있는지 확인해주세요.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
