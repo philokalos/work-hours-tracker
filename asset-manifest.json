@@ -1,14 +1,10 @@
 {
   "files": {
-    "main.js": "/work-hours-tracker/static/js/main.e0476ce3.js",
-    "static/js/187.0e5a7e92.chunk.js": "/work-hours-tracker/static/js/187.0e5a7e92.chunk.js",
-    "static/js/938.b36eed3d.chunk.js": "/work-hours-tracker/static/js/938.b36eed3d.chunk.js",
+    "main.js": "/work-hours-tracker/static/js/main.d5a3f1f4.js",
     "index.html": "/work-hours-tracker/index.html",
-    "main.e0476ce3.js.map": "/work-hours-tracker/static/js/main.e0476ce3.js.map",
-    "187.0e5a7e92.chunk.js.map": "/work-hours-tracker/static/js/187.0e5a7e92.chunk.js.map",
-    "938.b36eed3d.chunk.js.map": "/work-hours-tracker/static/js/938.b36eed3d.chunk.js.map"
+    "main.d5a3f1f4.js.map": "/work-hours-tracker/static/js/main.d5a3f1f4.js.map"
   },
   "entrypoints": [
-    "static/js/main.e0476ce3.js"
+    "static/js/main.d5a3f1f4.js"
   ]
 }
