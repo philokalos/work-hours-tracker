@@ -1,6 +1,73 @@
 import React, { useState, useEffect } from 'react';
 import Tesseract from 'tesseract.js';
 
+const TimeInput = ({ value, onChange }) => {
+  const [displayValue, setDisplayValue] = useState(value || '');
+
+  useEffect(() => {
+    setDisplayValue(value || '');
+  }, [value]);
+
+  const formatTimeStr = (raw) => {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length <= 2) return digits;
+    return digits.slice(0, 2) + ':' + digits.slice(2, 4);
+  };
+
+  const isValidTime = (str) => {
+    const match = str.match(/^(\d{2}):(\d{2})$/);
+    if (!match) return false;
+    const h = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    return h >= 0 && h <= 23 && m >= 0 && m <= 59;
+  };
+
+  const handleChange = (e) => {
+    const raw = e.target.value;
+    if (raw.length > 5) return;
+    setDisplayValue(formatTimeStr(raw));
+  };
+
+  const commit = () => {
+    const formatted = displayValue;
+    if (formatted === '') {
+      onChange('');
+    } else if (isValidTime(formatted)) {
+      onChange(formatted);
+    } else {
+      setDisplayValue(value || '');
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      commit();
+      e.target.blur();
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      maxLength={5}
+      placeholder="HH:MM"
+      value={displayValue}
+      onChange={handleChange}
+      onBlur={commit}
+      onKeyDown={handleKeyDown}
+      style={{
+        padding: '4px',
+        border: '1px solid #dee2e6',
+        borderRadius: '4px',
+        width: '65px',
+        fontSize: '13px',
+        textAlign: 'center'
+      }}
+    />
+  );
+};
+
 const WorkHoursTracker = () => {
   const initialRecords = {};
   const initialTargets = {};
@@ -111,9 +178,6 @@ const WorkHoursTracker = () => {
     localStorage.setItem('workHoursRecords', JSON.stringify(records));
   }, [records]);
 
-  // 현재 월의 목표 시간
-  const currentTarget = monthlyTargets[currentMonth] || 150;
-
   // 시간 문자열을 분으로 변환
   const timeToMinutes = (timeStr) => {
     if (!timeStr) return 0;
@@ -159,6 +223,18 @@ const WorkHoursTracker = () => {
     return days;
   };
 
+  // 월 근무일수 계산
+  const calculateWorkingDays = (monthStr) => {
+    const days = getDaysInMonth(monthStr);
+    return days.filter(({ date, isWeekend }) => !isWeekend && !isHoliday(date)).length;
+  };
+
+  // 현재 월의 목표 시간
+  const DAILY_WORK_HOURS = 7.5;
+  const calculatedTarget = calculateWorkingDays(currentMonth) * DAILY_WORK_HOURS;
+  const hasCustomTarget = monthlyTargets[currentMonth] !== undefined;
+  const currentTarget = hasCustomTarget ? monthlyTargets[currentMonth] : calculatedTarget;
+
   // 기록 업데이트
   const updateRecord = (date, field, value) => {
     setRecords(prev => ({
@@ -170,13 +246,13 @@ const WorkHoursTracker = () => {
     }));
   };
 
-  // 연차 퀵입력 (8시간)
+  // 연차 퀵입력 (7시간 30분)
   const setAnnualLeave = (date) => {
     setRecords(prev => ({
       ...prev,
       [date]: {
         startTime: '08:00',
-        endTime: '17:30',
+        endTime: '17:00',
         lunchTime: 90,
         excludeTime: 0,
         memo: '연차'
@@ -210,7 +286,7 @@ const WorkHoursTracker = () => {
       ...prev,
       [date]: {
         startTime: '08:00',
-        endTime: '17:30',
+        endTime: '17:00',
         lunchTime: 90,
         excludeTime: 0,
         memo: ''
@@ -480,6 +556,16 @@ const WorkHoursTracker = () => {
     setEditingTarget(false);
   };
 
+  // 목표 시간 자동 계산으로 초기화
+  const resetTarget = () => {
+    setMonthlyTargets(prev => {
+      const next = { ...prev };
+      delete next[currentMonth];
+      return next;
+    });
+    setEditingTarget(false);
+  };
+
   // 주차별 그룹핑
   const weekGroups = days.reduce((acc, day) => {
     if (!acc[day.weekNumber]) acc[day.weekNumber] = [];
@@ -600,9 +686,11 @@ const WorkHoursTracker = () => {
             borderRadius: '8px',
             textAlign: 'center'
           }}>
-            <div style={{ fontSize: '12px', color: '#1971c2', marginBottom: '4px' }}>월 목표시간</div>
+            <div style={{ fontSize: '12px', color: '#1971c2', marginBottom: '4px' }}>
+              월 목표시간 {hasCustomTarget ? '(수정됨)' : `(자동 ${calculateWorkingDays(currentMonth)}일 × ${DAILY_WORK_HOURS}h)`}
+            </div>
             {editingTarget ? (
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center' }}>
                 <input
                   type="number"
                   value={targetInput}
@@ -610,14 +698,34 @@ const WorkHoursTracker = () => {
                   style={{ width: '60px', textAlign: 'center', padding: '4px' }}
                 />
                 <button onClick={saveTarget} style={{ padding: '4px 8px', cursor: 'pointer' }}>저장</button>
+                <button onClick={() => setEditingTarget(false)} style={{ padding: '4px 8px', cursor: 'pointer', color: '#868e96' }}>취소</button>
               </div>
             ) : (
-              <div 
-                onClick={() => { setEditingTarget(true); setTargetInput(String(currentTarget)); }}
-                style={{ fontSize: '24px', fontWeight: 'bold', color: '#1971c2', cursor: 'pointer' }}
-              >
-                {currentTarget}시간
-              </div>
+              <>
+                <div
+                  onClick={() => { setEditingTarget(true); setTargetInput(String(currentTarget)); }}
+                  style={{ fontSize: '24px', fontWeight: 'bold', color: '#1971c2', cursor: 'pointer' }}
+                >
+                  {currentTarget}시간
+                </div>
+                {hasCustomTarget && (
+                  <button
+                    onClick={resetTarget}
+                    style={{
+                      marginTop: '4px',
+                      padding: '2px 8px',
+                      border: '1px solid #a5d8ff',
+                      backgroundColor: '#e7f5ff',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '10px',
+                      color: '#1971c2'
+                    }}
+                  >
+                    자동 계산으로 초기화 ({calculatedTarget}h)
+                  </button>
+                )}
+              </>
             )}
           </div>
 
@@ -749,31 +857,15 @@ const WorkHoursTracker = () => {
                         )}
                       </td>
                       <td style={{ padding: '4px', textAlign: 'center' }}>
-                        <input
-                          type="time"
+                        <TimeInput
                           value={record.startTime || ''}
-                          onChange={(e) => updateRecord(date, 'startTime', e.target.value)}
-                          style={{
-                            padding: '4px',
-                            border: '1px solid #dee2e6',
-                            borderRadius: '4px',
-                            width: '80px',
-                            fontSize: '13px'
-                          }}
+                          onChange={(val) => updateRecord(date, 'startTime', val)}
                         />
                       </td>
                       <td style={{ padding: '4px', textAlign: 'center' }}>
-                        <input
-                          type="time"
+                        <TimeInput
                           value={record.endTime || ''}
-                          onChange={(e) => updateRecord(date, 'endTime', e.target.value)}
-                          style={{
-                            padding: '4px',
-                            border: '1px solid #dee2e6',
-                            borderRadius: '4px',
-                            width: '80px',
-                            fontSize: '13px'
-                          }}
+                          onChange={(val) => updateRecord(date, 'endTime', val)}
                         />
                       </td>
                       <td style={{ padding: '4px', textAlign: 'center', color: '#868e96', fontSize: '12px' }}>
@@ -824,7 +916,7 @@ const WorkHoursTracker = () => {
                           <div style={{ display: 'flex', gap: '2px' }}>
                             <button
                               onClick={() => setDefaultWork(date)}
-                              title="기본근무 (08:00-17:30)"
+                              title="기본근무 (08:00-17:00)"
                               style={{
                                 padding: '2px 6px',
                                 border: '1px solid #dee2e6',
@@ -839,7 +931,7 @@ const WorkHoursTracker = () => {
                             </button>
                             <button
                               onClick={() => setAnnualLeave(date)}
-                              title="연차 (8시간)"
+                              title="연차 (7시간 30분)"
                               style={{
                                 padding: '2px 6px',
                                 border: '1px solid #ffa8a8',
@@ -918,7 +1010,7 @@ const WorkHoursTracker = () => {
         color: '#868e96',
         fontSize: '12px'
       }}>
-        점심시간 1시간 30분 자동 제외 | 데이터는 브라우저에 자동 저장됩니다
+        1일 기준 근무시간 7시간 30분 | 점심시간 1시간 30분 자동 제외 | 데이터는 브라우저에 자동 저장됩니다
       </div>
 
       {/* OCR 모달 */}
