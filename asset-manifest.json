@@ -1,10 +1,10 @@
 {
   "files": {
-    "main.js": "/work-hours-tracker/static/js/main.d5a3f1f4.js",
+    "main.js": "/work-hours-tracker/static/js/main.1c495980.js",
     "index.html": "/work-hours-tracker/index.html",
-    "main.d5a3f1f4.js.map": "/work-hours-tracker/static/js/main.d5a3f1f4.js.map"
+    "main.1c495980.js.map": "/work-hours-tracker/static/js/main.1c495980.js.map"
   },
   "entrypoints": [
-    "static/js/main.d5a3f1f4.js"
+    "static/js/main.1c495980.js"
   ]
 }
