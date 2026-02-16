@@ -366,22 +366,139 @@ const WorkHoursTracker = () => {
   };
 
   // OCR 텍스트에서 근무 기록 파싱
+  // 이미지 전처리 (OCR 정확도 향상: 스케일업 + 그레이스케일 + 대비강화)
+  // 주의: blur/이진화는 점(.)과 콜론(:)을 파괴하므로 사용하지 않음
+  const preprocessImage = (imageUrl) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // 2배 확대로 해상도 향상
+        const scale = 2;
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        // 그레이스케일 + 대비 강화 (Tesseract 내부 이진화에 맡김)
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+
+        for (let i = 0; i < data.length; i += 4) {
+          let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          // 대비 1.5배 강화 (중간점 128 기준)
+          gray = Math.max(0, Math.min(255, 128 + (gray - 128) * 1.5));
+          data[i] = gray;
+          data[i + 1] = gray;
+          data[i + 2] = gray;
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.src = imageUrl;
+    });
+  };
+
   const parseOcrText = (text) => {
     const lines = text.split('\n').filter(line => line.trim());
     const parsedRecords = {};
     const [currentYear] = currentMonth.split('-');
 
-    for (const line of lines) {
+    // OCR에서 자주 발생하는 숫자→비숫자 오인식 매핑
+    const ocrDigitMap = {
+      '(': '0', ')': '0', '{': '0', '[': '0', 'D': '0', 'O': '0', 'o': '0',
+      'l': '1', 'I': '1', 'i': '1', '|': '1', '!': '1',
+      'Z': '2', 'z': '2',
+      '<': '4',
+      'S': '5', 's': '5', 'c': '5',
+      'b': '6',
+      '>': '7',
+      'B': '8',
+      '¢': '9', 'g': '9', 'q': '9'
+    };
+
+    // 시간 추출 헬퍼: 라인에서 HH:MM 및 HHMM 패턴 찾기
+    const extractTimes = (text) => {
+      const times = [];
+      // 1차: HH:MM (콜론 있는 시간)
+      const timeRegex = /(\d{1,2}):(\d{2})/g;
+      let match;
+      while ((match = timeRegex.exec(text)) !== null) {
+        const h = parseInt(match[1]);
+        const m = parseInt(match[2]);
+        if (h >= 5 && h <= 22 && m >= 0 && m <= 59) {
+          times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+        }
+      }
+      // 2차: HHMM/HMM (OCR이 콜론 누락 시)
+      if (times.length < 2) {
+        const colonless = text.replace(/\d{1,2}:\d{2}/g, ' ');
+        const numTokens = colonless.match(/\d{3,4}/g) || [];
+        for (const num of numTokens) {
+          let h, m;
+          if (num.length === 4) {
+            h = parseInt(num.substring(0, 2));
+            m = parseInt(num.substring(2));
+          } else {
+            h = parseInt(num.substring(0, 1));
+            m = parseInt(num.substring(1));
+          }
+          if (h >= 5 && h <= 22 && m >= 0 && m <= 59) {
+            const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            if (!times.includes(timeStr)) {
+              times.push(timeStr);
+            }
+          }
+        }
+      }
+      return times;
+    };
+
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const line = lines[lineIdx];
       let dateStr = null;
 
-      // YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD
-      const fullDateMatch = line.match(/(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})/);
-      // MM-DD, MM.DD, MM/DD (날짜 구분자: - . /)
-      const shortDateMatch = line.match(/(?:^|[^\d:])(\d{1,2})[-.\/](\d{1,2})(?=[^\d:]|$)/);
+      // 1) YYYY.MM.DD (구분자 있는 전체 날짜)
+      const fullDateMatch = line.match(/(\d{4})[-.\/](\d{1,2})[-.\/]\s*(\d{1,2})/);
+      // 2) YYYYMMDD (연결된 날짜)
+      const concatDateMatch = !fullDateMatch
+        ? line.match(/(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/) : null;
+      // 3) 연도 일부 누락: X.MM.DD (OCR이 2026을 6으로 읽을 때 등)
+      const partialYearMatch = (!fullDateMatch && !concatDateMatch)
+        ? line.match(/\d{1,3}[-.\/](0[1-9]|1[0-2])[-.\/]\s*(\d{1,2})/) : null;
+      // 4) MM.DD
+      const shortDateMatch = (!fullDateMatch && !concatDateMatch && !partialYearMatch)
+        ? line.match(/(?:^|[^\d:])(\d{1,2})[-.\/](\d{1,2})(?=[^\d:]|$)/) : null;
 
       if (fullDateMatch) {
-        const [, year, month, day] = fullDateMatch;
-        dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+        const matchStr = fullDateMatch[0];
+        const [, year, month] = fullDateMatch;
+        let day = fullDateMatch[3];
+
+        // OCR 숫자 복구: 날짜 마지막 숫자 뒤 비숫자 문자가 원래 숫자일 수 있음
+        // 예: 2026.02.1( → day=1, nextChar=(→0 → day=10
+        if (day.length === 1) {
+          const matchEnd = line.indexOf(matchStr) + matchStr.length;
+          const nextChar = line[matchEnd];
+          if (nextChar && ocrDigitMap[nextChar]) {
+            day = day + ocrDigitMap[nextChar];
+          }
+        }
+        const d = parseInt(day);
+        if (d >= 1 && d <= 31) {
+          dateStr = `${year}-${month.padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        }
+      } else if (concatDateMatch) {
+        const [, year, month, day] = concatDateMatch;
+        dateStr = `${year}-${month}-${day}`;
+      } else if (partialYearMatch) {
+        const [, month, day] = partialYearMatch;
+        const d = parseInt(day);
+        if (d >= 1 && d <= 31) {
+          dateStr = `${currentYear}-${month}-${String(d).padStart(2, '0')}`;
+        }
       } else if (shortDateMatch) {
         const [, month, day] = shortDateMatch;
         const m = parseInt(month);
@@ -393,27 +510,97 @@ const WorkHoursTracker = () => {
 
       if (!dateStr) continue;
 
-      // 시간 패턴 추출 (HH:MM) - 날짜 부분 이후에서 찾기
-      const dateMatchEnd = fullDateMatch
-        ? line.indexOf(fullDateMatch[0]) + fullDateMatch[0].length
+      // 중복 날짜: 이미 완전한 레코드가 있으면 건너뛰기
+      if (parsedRecords[dateStr]?.startTime && parsedRecords[dateStr]?.endTime) continue;
+
+      // 휴일 건너뛰기 (OCR 오인식 포함: 류일, 후일 등)
+      if (/휴일|류일/.test(line)) continue;
+
+      // 시간 추출 - 날짜 이후 부분에서
+      const dateMatchObj = fullDateMatch || concatDateMatch || partialYearMatch;
+      const dateMatchEnd = dateMatchObj
+        ? line.indexOf(dateMatchObj[0]) + dateMatchObj[0].length
         : (shortDateMatch ? line.indexOf(shortDateMatch[0]) + shortDateMatch[0].length : 0);
       const afterDate = line.slice(dateMatchEnd);
 
-      const times = [];
-      const timeRegex = /(\d{1,2}):(\d{2})/g;
-      let match;
-      while ((match = timeRegex.exec(afterDate)) !== null) {
-        const h = parseInt(match[1]);
-        const m = parseInt(match[2]);
-        if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
-          times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+      let times = extractTimes(afterDate);
+
+      // 인접 라인 검색: 시간이 다른 줄에 있을 때 (테이블 OCR 특성)
+      if (times.length === 0) {
+        for (const offset of [-1, 1]) {
+          const adjIdx = lineIdx + offset;
+          if (adjIdx < 0 || adjIdx >= lines.length) continue;
+          const adjLine = lines[adjIdx];
+          // 인접 라인에 날짜가 있으면 건너뛰기 (다른 행의 데이터)
+          if (/\d{4}[-.\/]\d{1,2}[-.\/]/.test(adjLine)) continue;
+          if (/(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/.test(adjLine)) continue;
+          const adjTimes = extractTimes(adjLine);
+          if (adjTimes.length > 0) {
+            times = adjTimes;
+            break;
+          }
         }
       }
 
-      if (times.length >= 2) {
+      // 출근 < 퇴근 순서 보장 (HHMM 폴백이 뒤에 추가될 수 있음)
+      // sort 대신 swap: sort는 중복 시간(예: 8:09가 F열, I열에 모두 있음)을 앞으로 밀어냄
+      if (times.length >= 2 && times[0] > times[1]) {
+        [times[0], times[1]] = [times[1], times[0]];
+      }
+
+      // 키워드 감지 (OCR 오인식 변형 포함)
+      const isAnnualLeave = /연[차사]/.test(line);
+      const isHalfLeave = /[반란][차사]/.test(line);
+      const isRemoteWork = /타지\s*출근|재택/.test(line);
+
+      if (isAnnualLeave && times.length < 2) {
+        parsedRecords[dateStr] = {
+          startTime: '08:00',
+          endTime: '17:00',
+          lunchTime: 90,
+          excludeTime: 0,
+          memo: '연차'
+        };
+      } else if (isHalfLeave) {
+        if (times.length >= 2) {
+          const endH = parseInt(times[1].split(':')[0]);
+          const memo = endH <= 14 ? '오전반차' : '오후반차';
+          parsedRecords[dateStr] = {
+            startTime: times[0],
+            endTime: times[1],
+            lunchTime: 0,
+            excludeTime: 0,
+            memo
+          };
+        } else {
+          parsedRecords[dateStr] = {
+            startTime: '13:00',
+            endTime: '17:30',
+            lunchTime: 0,
+            excludeTime: 0,
+            memo: '오전반차'
+          };
+        }
+      } else if (isRemoteWork && times.length < 2) {
+        parsedRecords[dateStr] = {
+          startTime: '08:00',
+          endTime: '17:00',
+          lunchTime: 90,
+          excludeTime: 0,
+          memo: '타지출근'
+        };
+      } else if (times.length >= 2) {
         parsedRecords[dateStr] = {
           startTime: times[0],
           endTime: times[1],
+          lunchTime: 90,
+          excludeTime: 0,
+          memo: ''
+        };
+      } else if (times.length === 1) {
+        parsedRecords[dateStr] = {
+          startTime: times[0],
+          endTime: '',
           lunchTime: 90,
           excludeTime: 0,
           memo: ''
@@ -444,6 +631,9 @@ const WorkHoursTracker = () => {
     setOcrParsedRecords(null);
 
     try {
+      // 이미지 전처리 (그레이스케일 + 이진화로 텍스트 선명화)
+      const processedImageUrl = await preprocessImage(imageUrl);
+
       const worker = await Tesseract.createWorker('kor+eng', 1, {
         logger: (m) => {
           if (m.status === 'recognizing text') {
@@ -452,7 +642,7 @@ const WorkHoursTracker = () => {
         }
       });
 
-      const { data: { text } } = await worker.recognize(imageUrl);
+      const { data: { text } } = await worker.recognize(processedImageUrl);
       await worker.terminate();
 
       setOcrResult(text);
@@ -1128,7 +1318,7 @@ const WorkHoursTracker = () => {
                     }}>
                       {Object.entries(ocrParsedRecords).map(([date, rec]) => (
                         <div key={date} style={{ marginBottom: '4px', color: '#2f9e44' }}>
-                          {date}: {rec.startTime} ~ {rec.endTime}
+                          {date}: {rec.memo ? `[${rec.memo}] ` : ''}{rec.startTime}{rec.endTime ? ` ~ ${rec.endTime}` : rec.startTime ? ' (출근)' : ''}
                         </div>
                       ))}
                     </div>
