@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Tesseract from 'tesseract.js';
 
 const TimeInput = ({ value, onChange }) => {
@@ -99,8 +99,22 @@ const WorkHoursTracker = () => {
 
   const LUNCH_BREAK = 90; // 점심시간 기본값 90분 (1시간 30분)
   
-  // 오늘 날짜
-  const today = new Date().toISOString().split('T')[0];
+  // 오늘 날짜 (로컬 타임존 기준, 자정 자동 갱신)
+  const getLocalDate = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  };
+  const [today, setToday] = useState(getLocalDate);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const newToday = getLocalDate();
+      if (newToday !== today) setToday(newToday);
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [today]);
+
+  const todayWeekRef = useRef(null);
 
   // 대한민국 공휴일 (연도별 하드코딩)
   const holidays = {
@@ -688,11 +702,13 @@ const WorkHoursTracker = () => {
     let totalMinutes = 0;
     const weeklyMinutes = {};
     let remainingWorkDays = 0;
+    let annualLeaveCount = 0;
+    let halfLeaveCount = 0;
 
     days.forEach(({ date, weekNumber, isWeekend }) => {
       const record = records[date];
       const holiday = isHoliday(date);
-      
+
       if (record?.startTime && record?.endTime) {
         const lunchTime = record.lunchTime ?? LUNCH_BREAK;
         const excludeTime = record.excludeTime ?? 0;
@@ -700,7 +716,12 @@ const WorkHoursTracker = () => {
         totalMinutes += minutes;
         weeklyMinutes[weekNumber] = (weeklyMinutes[weekNumber] || 0) + minutes;
       }
-      
+
+      if (record?.memo) {
+        if (/연차/.test(record.memo)) annualLeaveCount++;
+        if (/반차/.test(record.memo)) halfLeaveCount++;
+      }
+
       if (date >= today && !isWeekend && !holiday && !record?.startTime) {
         remainingWorkDays++;
       }
@@ -720,12 +741,21 @@ const WorkHoursTracker = () => {
       isDeficit: remainingMinutes > 0,
       remainingWorkDays,
       avgMinutesPerDay,
-      avgHoursPerDay: minutesToTimeStr(avgMinutesPerDay)
+      avgHoursPerDay: minutesToTimeStr(avgMinutesPerDay),
+      annualLeaveCount,
+      halfLeaveCount
     };
   };
 
   const stats = calculateMonthlyStats();
   const days = getDaysInMonth(currentMonth);
+
+  // 오늘이 포함된 주차로 자동 스크롤
+  useEffect(() => {
+    if (todayWeekRef.current) {
+      todayWeekRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [currentMonth]);
 
   // 월 변경
   const changeMonth = (delta) => {
@@ -970,18 +1000,38 @@ const WorkHoursTracker = () => {
               </div>
             </div>
           )}
+
+          {(stats.annualLeaveCount > 0 || stats.halfLeaveCount > 0) && (
+            <div style={{
+              backgroundColor: '#fff5f5',
+              padding: '16px',
+              borderRadius: '8px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '12px', color: '#e03131', marginBottom: '4px' }}>휴가 사용</div>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#e03131' }}>
+                {stats.annualLeaveCount > 0 && <span>연차 {stats.annualLeaveCount}</span>}
+                {stats.annualLeaveCount > 0 && stats.halfLeaveCount > 0 && <span> · </span>}
+                {stats.halfLeaveCount > 0 && <span>반차 {stats.halfLeaveCount}</span>}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* 주차별 기록 */}
       {Object.entries(weekGroups).map(([weekNum, weekDays]) => (
-        <div key={weekNum} style={{
-          backgroundColor: 'white',
-          borderRadius: '12px',
-          padding: '16px',
-          marginBottom: '16px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
-        }}>
+        <div
+          key={weekNum}
+          ref={weekDays.some(d => d.date === today) ? todayWeekRef : null}
+          style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '16px',
+            marginBottom: '16px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+          }}
+        >
           <div style={{ 
             display: 'flex', 
             justifyContent: 'space-between', 
@@ -1057,9 +1107,35 @@ const WorkHoursTracker = () => {
                           value={record.endTime || ''}
                           onChange={(val) => updateRecord(date, 'endTime', val)}
                         />
+                        {isToday && record.startTime && !record.endTime && stats.avgMinutesPerDay > 0 && (() => {
+                          const recEnd = timeToMinutes(record.startTime) + stats.avgMinutesPerDay + lunchTime + excludeTime;
+                          return recEnd <= 1439 ? (
+                            <div style={{ fontSize: '10px', color: '#868e96', marginTop: '2px' }}>
+                              목표 {minutesToTimeStr(recEnd)}
+                            </div>
+                          ) : null;
+                        })()}
                       </td>
-                      <td style={{ padding: '4px', textAlign: 'center', color: '#868e96', fontSize: '12px' }}>
-                        1:30:00
+                      <td style={{ padding: '4px', textAlign: 'center' }}>
+                        <select
+                          value={lunchTime}
+                          onChange={(e) => updateRecord(date, 'lunchTime', parseInt(e.target.value))}
+                          style={{
+                            padding: '4px',
+                            border: '1px solid #dee2e6',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            color: '#868e96',
+                            backgroundColor: 'white',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <option value={0}>없음</option>
+                          <option value={30}>30분</option>
+                          <option value={60}>1시간</option>
+                          <option value={90}>1시간30분</option>
+                          <option value={120}>2시간</option>
+                        </select>
                       </td>
                       <td style={{ padding: '4px', textAlign: 'center' }}>
                         <input
@@ -1100,7 +1176,7 @@ const WorkHoursTracker = () => {
                               borderRadius: '4px',
                               width: '70px',
                               fontSize: '12px',
-                              color: record.memo ? '#e03131' : '#333'
+                              color: /연차|반차/.test(record.memo) ? '#e03131' : '#333'
                             }}
                           />
                           <div style={{ display: 'flex', gap: '2px' }}>
